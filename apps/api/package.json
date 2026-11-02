@@ -1,0 +1,47 @@
+{
+  "name": "@hotel/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Booking API: NestJS, event-sourced reservations, CQRS read models, Redis cache",
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.ts",
+    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.integration.config.ts --runInBand",
+    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.e2e.config.ts --runInBand",
+    "db:migrate": "knex migrate:latest --knexfile knexfile.ts && knex migrate:latest --knexfile knexfile.ts --env test",
+    "db:rollback": "knex migrate:rollback --all --knexfile knexfile.ts && knex migrate:rollback --all --knexfile knexfile.ts --env test",
+    "db:seed": "knex seed:run --knexfile knexfile.ts && knex seed:run --knexfile knexfile.ts --env test",
+    "projections:rebuild": "ts-node --transpile-only -P tsconfig.json src/cli/rebuild-projections.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.3.2",
+    "@nestjs/config": "12.0.1",
+    "@nestjs/core": "12.3.2",
+    "@nestjs/cqrs": "12.1.2",
+    "@nestjs/platform-express": "12.3.2",
+    "@nestjs/schedule": "12.0.2",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.15.1",
+    "dotenv": "18.0.9",
+    "ioredis": "6.0.0",
+    "knex": "3.3.0",
+    "mysql2": "3.24.6",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "12.0.11",
+    "@nestjs/testing": "12.3.2",
+    "@types/jest": "30.0.0",
+    "@types/node": "26.6.6",
+    "@types/supertest": "7.2.1",
+    "jest": "30.5.2",
+    "supertest": "7.3.1",
+    "ts-jest": "29.4.15",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,411 @@
+openapi: 3.1.0
+info:
+  title: Hotel Room Booking MVP API
+  version: 0.1.0
+  description: |
+    HTTP contract for feature 001-hotel-room-booking. Three groups of paths:
+    public reads and guest commands (`/rooms`, `/reservations`), the payment operator simulator
+    (`/payment-operator`) and the webhook (`/webhooks/payments`). All stay dates are `YYYY-MM-DD`
+    in the Europe/Warsaw zone. Amounts are integers in grosze + currency.
+servers:
+  - url: http://localhost:3100
+tags:
+  - name: rooms
+  - name: reservations
+  - name: payment-operator
+  - name: webhooks
+
+paths:
+  /rooms:
+    get:
+      tags: [rooms]
+      summary: List of the three rooms (a card for each)
+      x-cache: { key: "rooms:list", ttlSeconds: 600 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RoomCard" }
+
+  /rooms/{roomId}:
+    get:
+      tags: [rooms]
+      summary: Room card
+      x-cache: { key: "room:{id}:card", ttlSeconds: 600 }
+      parameters: [{ $ref: "#/components/parameters/roomId" }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomCard" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /rooms/{roomId}/blocked-nights:
+    get:
+      tags: [rooms]
+      summary: Blocked nights of a room in a date range (pending and confirmed)
+      x-cache: { key: "room:{id}:nights:{from}:{to}", ttlSeconds: 60 }
+      parameters:
+        - { $ref: "#/components/parameters/roomId" }
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date }, description: "inclusive; at most 93 days from `from`" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roomId, nights]
+                properties:
+                  roomId: { type: integer }
+                  nights:
+                    type: array
+                    items:
+                      type: object
+                      required: [night, status]
+                      properties:
+                        night: { type: string, format: date }
+                        status: { type: string, enum: [held, confirmed] }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /reservations:
+    post:
+      tags: [reservations]
+      summary: Create a reservation (PendingPayment state, nights blocked)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateReservationRequest" }
+      responses:
+        "201":
+          description: The only response in which secureCode appears.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateReservationResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: RoomNotAvailableError – at least one night is already taken.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { code: ROOM_NOT_AVAILABLE, message: "At least one requested night is already blocked." }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /reservations/{reservationId}/status:
+    get:
+      tags: [reservations]
+      summary: Public status (for the waiting screen), no other data
+      x-cache: { key: "reservation:{id}:status", ttlSeconds: 5 }
+      parameters: [{ $ref: "#/components/parameters/reservationId" }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reservationId, status]
+                properties:
+                  reservationId: { type: string }
+                  status: { $ref: "#/components/schemas/ReservationStatus" }
+                  reason: { type: string, nullable: true, enum: [rejected_by_operator, abandoned_by_guest] }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /reservations/{reservationId}/access:
+    post:
+      tags: [reservations]
+      summary: Secure code verification, access token issuance (15 min)
+      parameters: [{ $ref: "#/components/parameters/reservationId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secureCode]
+              properties:
+                secureCode: { type: string, pattern: "^[A-Za-z0-9]{6}$" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accessToken, expiresInSeconds]
+                properties:
+                  accessToken: { type: string, description: "32 bytes as hex" }
+                  expiresInSeconds: { type: integer, example: 900 }
+        "401":
+          description: InvalidSecureCode; the attemptsLeft field tells how many attempts remain.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/Error" }
+                  - type: object
+                    properties: { attemptsLeft: { type: integer } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429":
+          description: The limit of 5 attempts per 15 minutes was exceeded.
+          headers:
+            Retry-After: { schema: { type: integer }, description: "seconds until unlock" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /reservations/{reservationId}:
+    get:
+      tags: [reservations]
+      summary: Reservation details and history (requires an access token)
+      x-cache: { key: "reservation:{id}:details", ttlSeconds: 300 }
+      security: [{ reservationAccess: [] }]
+      parameters: [{ $ref: "#/components/parameters/reservationId" }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReservationDetails" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /reservations/{reservationId}/cancel:
+    post:
+      tags: [reservations]
+      summary: Cancel a confirmed reservation before the check-in day
+      security: [{ reservationAccess: [] }]
+      parameters: [{ $ref: "#/components/parameters/reservationId" }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReservationDetails" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: ConcurrencyError – the frontend retries once.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: ReservationNotCancellableError (wrong state or check-in day ≤ today).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /payment-operator/payments/{paymentId}:
+    get:
+      tags: [payment-operator]
+      summary: Data for the operator simulator screen (amount, dates, reservation identifier)
+      parameters: [{ $ref: "#/components/parameters/paymentId" }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [paymentId, reservationId, amount, currency, checkIn, checkOut, roomName, status]
+                properties:
+                  paymentId: { type: string }
+                  reservationId: { type: string }
+                  amount: { type: integer, description: grosze }
+                  currency: { type: string, example: PLN }
+                  checkIn: { type: string, format: date }
+                  checkOut: { type: string, format: date }
+                  roomName: { type: string }
+                  status: { $ref: "#/components/schemas/ReservationStatus" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /payment-operator/payments/{paymentId}/decide:
+    post:
+      tags: [payment-operator]
+      summary: Operator decision; the webhook is sent after delaySeconds
+      parameters: [{ $ref: "#/components/parameters/paymentId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, delaySeconds]
+              properties:
+                outcome: { type: string, enum: [paid, rejected, abandoned] }
+                delaySeconds: { type: integer, enum: [0, 3, 10] }
+      responses:
+        "202":
+          description: Accepted; the webhook will be sent after delaySeconds.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [paymentId, outcome, scheduledInSeconds]
+                properties:
+                  paymentId: { type: string }
+                  outcome: { type: string }
+                  scheduledInSeconds: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: RESERVATION_NOT_PENDING – the reservation has already expired or has a decision; the simulator shows a message to the guest (decision Q16).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /webhooks/payments:
+    post:
+      tags: [webhooks]
+      summary: Webhook from the payment operator (HMAC-SHA256 signature), always 200 for a correctly signed request
+      description: |
+        `signature = hex(HMAC_SHA256(secret, `${paymentId}.${outcome}.${sentAt}`))`.
+        `paid` → ConfirmPayment; `rejected` and `abandoned` → RejectPayment with `reason`.
+        A repeated or late webhook (reservation outside PendingPayment) returns 200 and changes nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentId, outcome, sentAt, signature]
+              properties:
+                paymentId: { type: string }
+                outcome: { type: string, enum: [paid, rejected, abandoned] }
+                reason: { type: string, nullable: true, example: abandoned_by_guest }
+                sentAt: { type: string, format: date-time }
+                signature: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [received, applied]
+                properties:
+                  received: { type: boolean, example: true }
+                  applied: { type: boolean, description: "false when the reservation was not in PendingPayment" }
+        "401":
+          description: Invalid signature.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    reservationAccess:
+      type: apiKey
+      in: header
+      name: X-Reservation-Access
+      description: Token from POST /reservations or POST /reservations/{id}/access; valid for 15 min.
+  parameters:
+    roomId: { name: roomId, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    reservationId: { name: reservationId, in: path, required: true, schema: { type: string, pattern: "^RES-[0-9A-HJKMNP-TV-Z]{6}$" } }
+    paymentId: { name: paymentId, in: path, required: true, schema: { type: string, pattern: "^PAY-[0-9A-HJKMNP-TV-Z]{10}$" } }
+  responses:
+    NotFound:
+      description: The resource does not exist (the same message regardless of whether it ever existed).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { code: NOT_FOUND, message: "Resource not found." }
+    Unauthorized:
+      description: Missing or invalid access token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: DTO validation error or domain rule error (InvalidStayError).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - { $ref: "#/components/schemas/Error" }
+              - type: object
+                properties:
+                  details:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        field: { type: string, example: guestName }
+                        code: { type: string, example: TOO_LONG, description: "REQUIRED | TOO_LONG | INVALID_EMAIL | INVALID_DATE | CHECK_OUT_NOT_AFTER_CHECK_IN | TOO_MANY_NIGHTS | CHECK_IN_IN_PAST | INVALID_FORMAT" }
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [NOT_FOUND, VALIDATION_FAILED, INVALID_STAY, ROOM_NOT_AVAILABLE, INVALID_SECURE_CODE,
+                 TOO_MANY_ATTEMPTS, UNAUTHORIZED, RESERVATION_NOT_CANCELLABLE, RESERVATION_NOT_PENDING, CONCURRENCY_CONFLICT, INVALID_SIGNATURE]
+        message: { type: string, description: "English developer message; the UI maps `code` to Polish text (research R-14)" }
+    ReservationStatus:
+      type: string
+      enum: [PendingPayment, Confirmed, Rejected, Expired, Cancelled]
+    RoomCard:
+      type: object
+      required: [id, name, description, features, pricePerNight, currency, checkInTime, checkOutTime]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string }
+        features: { type: array, items: { type: string } }
+        pricePerNight: { type: integer, description: grosze }
+        currency: { type: string, example: PLN }
+        checkInTime: { type: string, example: "15:00" }
+        checkOutTime: { type: string, example: "11:00" }
+        imageUrl: { type: string, nullable: true }
+    CreateReservationRequest:
+      type: object
+      required: [roomId, checkIn, checkOut, guestName, guestEmail]
+      properties:
+        roomId: { type: integer }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        guestName: { type: string, minLength: 1, maxLength: 100 }
+        guestEmail: { type: string, format: email }
+    CreateReservationResponse:
+      type: object
+      required: [reservationId, paymentId, secureCode, accessToken, status, totalAmount, currency, nights]
+      properties:
+        reservationId: { type: string, example: RES-7F3K2A }
+        paymentId: { type: string, example: PAY-9Q2M4H7ZXT }
+        secureCode: { type: string, pattern: "^[A-Za-z0-9]{6}$" }
+        accessToken: { type: string }
+        status: { $ref: "#/components/schemas/ReservationStatus" }
+        totalAmount: { type: integer }
+        currency: { type: string }
+        nights: { type: integer }
+    ReservationDetails:
+      type: object
+      required: [reservationId, status, room, checkIn, checkOut, nights, guestName, guestEmail, totalAmount, currency, cancellable, timeline]
+      properties:
+        reservationId: { type: string }
+        status: { $ref: "#/components/schemas/ReservationStatus" }
+        room:
+          type: object
+          required: [id, name, checkInTime, checkOutTime]
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            checkInTime: { type: string }
+            checkOutTime: { type: string }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        nights: { type: integer }
+        guestName: { type: string }
+        guestEmail: { type: string }
+        totalAmount: { type: integer }
+        currency: { type: string }
+        reason: { type: string, nullable: true, enum: [rejected_by_operator, abandoned_by_guest], description: "only in the Rejected state" }
+        refundAmount: { type: integer, nullable: true, description: "only in the Cancelled state" }
+        cancellable: { type: boolean, description: "Confirmed and check-in day > today" }
+        timeline:
+          type: array
+          items:
+            type: object
+            required: [eventType, occurredAt]
+            properties:
+              eventType: { type: string, enum: [ReservationRequested, PaymentConfirmed, PaymentRejected, ReservationExpired, ReservationCancelled] }
+              occurredAt: { type: string, format: date-time }
+              reason: { type: string, nullable: true, enum: [rejected_by_operator, abandoned_by_guest] }

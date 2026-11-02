@@ -1,0 +1,35 @@
+{
+  "name": "hotel-booking-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hotel room booking MVP: NestJS + Vue 3, event sourcing, CQRS, read models, Redis cache",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+    "test": "npm test --workspaces --if-present",
+    "test:integration": "npm run test:integration -w apps/api",
+    "test:e2e": "npm run test:e2e -w apps/api",
+    "lint": "eslint . && prettier --check \"apps/**/*.{ts,vue,json,css}\" \"*.{js,json}\"",
+    "format": "prettier --write \"apps/**/*.{ts,vue,json,css}\" \"*.{js,json}\"",
+    "db:migrate": "npm run db:migrate -w apps/api",
+    "db:seed": "npm run db:seed -w apps/api",
+    "projections:rebuild": "npm run projections:rebuild -w apps/api"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "concurrently": "10.0.6",
+    "eslint": "10.14.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-boundaries": "7.4.0",
+    "eslint-plugin-vue": "10.12.0",
+    "globals": "17.14.0",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1"
+  }
+}

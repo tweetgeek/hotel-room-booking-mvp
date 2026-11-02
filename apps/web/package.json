@@ -1,0 +1,30 @@
+{
+  "name": "@hotel/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Booking web app: Vue 3, Pinia stores with optimistic UI, Polish UI texts",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@vue/devtools-api": "8.2.1",
+    "pinia": "4.1.0",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
+  },
+  "devDependencies": {
+    "@pinia/testing": "2.0.2",
+    "@vitejs/plugin-vue": "6.0.10",
+    "@vue/test-utils": "2.5.1",
+    "jsdom": "30.1.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5",
+    "vue-tsc": "3.3.14"
+  }
+}
